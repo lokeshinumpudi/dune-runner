@@ -1,4 +1,4 @@
-import { Scene, Types, Physics, GameObjects } from "phaser";
+import { Scene, Types, Physics } from "phaser";
 
 export interface IGameEntity {
   update(): void;
@@ -41,9 +41,9 @@ export interface IDebugOptions {
 }
 
 export type InputConfig = {
-  jump: Types.Input.Keyboard.Key;
-  left: Types.Input.Keyboard.Key;
-  right: Types.Input.Keyboard.Key;
-  dash: Types.Input.Keyboard.Key;
-  debug: Types.Input.Keyboard.Key;
+  jump: Types.Input.Keyboard.CursorKeys;
+  left: Types.Input.Keyboard.CursorKeys;
+  right: Types.Input.Keyboard.CursorKeys;
+  dash: Types.Input.Keyboard.CursorKeys;
+  debug: Types.Input.Keyboard.CursorKeys;
 };
