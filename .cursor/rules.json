@@ -1,0 +1,56 @@
+{
+  "rules": {
+    "dune-game": {
+      "description": "Dune game project structure and organization",
+      "structure": {
+        "src/": {
+          "description": "Source code directory",
+          "contents": {
+            "scenes/": "Game scenes including DesertScene, MenuScene, etc.",
+            "objects/": "Game objects like Player, Enemy classes",
+            "systems/": "Game systems like InputSystem",
+            "components/": "Reusable game components",
+            "config/": "Game configuration files",
+            "levels/": "Level data and configurations",
+            "scripts/": "Utility scripts",
+            "interfaces/": "TypeScript interfaces",
+            "entities/": "Game entities",
+            "core/": "Core game functionality",
+            "types/": "TypeScript type definitions",
+            "constants/": "Game constants and enums",
+            "main.ts": "Main game initialization",
+            "index.html": "Main HTML file",
+            "vite-env.d.ts": "Vite environment types"
+          }
+        },
+        "public/": {
+          "description": "Public assets directory",
+          "contents": {
+            "assets/": {
+              "backgrounds/": "Background images (sky.png, dunes-far.png, dunes-near.png)",
+              "sprites/": "Game sprites (player.png, enemies, platforms)",
+              "sounds/": "Game audio files (mp3/wav/ogg)",
+              "ui/": "UI elements (buttons, icons, HUD)",
+              "particles/": "Particle effect textures"
+            }
+          }
+        },
+        "config": {
+          "vite.config.ts": "Vite configuration",
+          "tsconfig.json": "TypeScript configuration"
+        }
+      },
+      "assetNaming": {
+        "sprites": "Use descriptive names, e.g., 'player.png', 'sandworm.png'",
+        "sounds": "Use action-based names, e.g., 'jump.mp3', 'explosion.wav'",
+        "backgrounds": "Use layer-based names, e.g., 'sky.png', 'dunes-far.png'"
+      },
+      "important": [
+        "Assets are loaded from public/assets/ not assets/",
+        "Sound files should have fallbacks in different formats (mp3/wav/ogg)",
+        "Sprite sheets should follow the frameWidth/frameHeight specified in the loading code",
+        "All game scenes must be registered in main.ts"
+      ]
+    }
+  }
+}

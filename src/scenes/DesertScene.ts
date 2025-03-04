@@ -1,8 +1,11 @@
 import Phaser from "phaser";
 import { Player } from "../objects/Player";
 import { DestructibleObject } from "../objects/DestructibleObject";
-import { InputSystem } from "../systems/InputSystem";
+import InputSystem from "../systems/InputSystem";
 import Enemy from "../objects/Enemy";
+import HarkonnenEnemy from "../objects/HarkonnenEnemy";
+import OrnithopterEnemy from "../objects/OrnithopterEnemy";
+import SandwormEnemy from "../objects/SandwormEnemy";
 
 export class DesertScene extends Phaser.Scene {
   protected player!: Player;
@@ -26,6 +29,15 @@ export class DesertScene extends Phaser.Scene {
   protected startTime: number = 0;
   protected enemiesDefeated: number = 0;
   protected ammoUsed: number = 0;
+  protected touchControls!: {
+    left: Phaser.GameObjects.Container;
+    right: Phaser.GameObjects.Container;
+    jump: Phaser.GameObjects.Container;
+    shoot: Phaser.GameObjects.Container;
+    dash: Phaser.GameObjects.Container;
+  };
+  protected isMobile: boolean = false;
+  protected instructionsText!: Phaser.GameObjects.Text;
 
   constructor(config?: Phaser.Types.Scenes.SettingsConfig) {
     super(config || { key: "DesertScene" });
@@ -84,20 +96,53 @@ export class DesertScene extends Phaser.Scene {
       frameWidth: 32,
       frameHeight: 32,
     });
+    this.load.image("sand-particle", "assets/sprites/sand-particle.png");
+    this.load.image(
+      "platform-collapsing",
+      "assets/sprites/platform-collapsing.png"
+    );
+    this.load.spritesheet("sandworm", "assets/sprites/sandworm.png", {
+      frameWidth: 128,
+      frameHeight: 256,
+    });
+    this.load.spritesheet("harkonnen", "assets/sprites/harkonnen.png", {
+      frameWidth: 48,
+      frameHeight: 48,
+    });
+    this.load.spritesheet("ornithopter", "assets/sprites/ornithopter.png", {
+      frameWidth: 96,
+      frameHeight: 48,
+    });
+    this.load.image("spice", "assets/sprites/spice.png");
 
-    // Load sounds - updated to use MP3 files
-    this.load.audio("shoot", "assets/sounds/shoot.mp3");
-    this.load.audio("hit", "assets/sounds/hit.mp3");
-    this.load.audio("explosion", "assets/sounds/explosion.mp3");
-    this.load.audio("jump", "assets/sounds/jump.mp3");
-    this.load.audio("coin", "assets/sounds/coin.mp3");
-    this.load.audio("ammo", "assets/sounds/ammo.mp3");
-    this.load.audio("player-hit", "assets/sounds/player-hit.mp3");
-    this.load.audio("player-death", "assets/sounds/player-death.mp3");
-    this.load.audio("empty", "assets/sounds/empty.mp3");
+    // Load sounds with error handling
+    const audioFiles = [
+      "shoot",
+      "hit",
+      "explosion",
+      "jump",
+      "coin",
+      "ammo",
+      "player-hit",
+      "player-death",
+      "empty",
+      "sandworm",
+      "platform-collapse",
+      "spice-collect",
+    ];
+
+    audioFiles.forEach((key) => {
+      this.load.audio(key, `assets/sounds/${key}.mp3`).on("loaderror", () => {
+        console.warn(`Audio file ${key}.mp3 not found`);
+      });
+    });
   }
 
   create(): void {
+    // Check if we're on mobile first thing
+    this.isMobile =
+      this.sys.game.device.input.touch && !this.sys.game.device.os.desktop;
+
     // Stop menu music if it's playing
     if (this.sound.get("menu-music")) {
       this.sound.get("menu-music").stop();
@@ -111,8 +156,14 @@ export class DesertScene extends Phaser.Scene {
     this.registry.set("ammoUsed", 0);
     this.levelComplete = false;
 
-    // Set world bounds for scrolling - extended for larger level
-    this.physics.world.setBounds(0, 0, 6000, 600);
+    // Get game dimensions
+    const width = this.scale.width;
+    const height = this.scale.height;
+
+    // Set world bounds for scrolling - scale with game width
+    const worldWidth = Math.max(width * 8, 8000); // At least 8000 or 8x screen width
+    const worldHeight = height;
+    this.physics.world.setBounds(0, 0, worldWidth, worldHeight);
 
     // Initialize score
     this.registry.set("score", 0);
@@ -131,8 +182,20 @@ export class DesertScene extends Phaser.Scene {
     // Create animations
     this.createAnimations();
 
-    // Create player - position higher up to be visible and on a platform
-    this.player = new Player(this, 100, 100);
+    // Calculate safe spawn position (20% from left, 80% from top)
+    const spawnX = width * 0.2;
+    const spawnY = height * 0.8;
+
+    // Create player with proper spawn position
+    this.player = new Player(this, spawnX, spawnY);
+
+    // Fix player physics body with proper scaling
+    const playerScale = height / 720; // Base scale on 720p height
+    this.player.setScale(Math.min(1, playerScale));
+    this.player.body.setCollideWorldBounds(true);
+    this.player.body.setBounce(0);
+    this.player.body.setMaxVelocity(500 * playerScale, 800 * playerScale);
+    this.player.body.setDragX(1000 * playerScale);
 
     // Create destructible objects
     this.destructibles = this.physics.add.staticGroup();
@@ -147,13 +210,18 @@ export class DesertScene extends Phaser.Scene {
     this.ammoPickups = this.physics.add.group();
     this.createCollectibles();
 
-    // Set up camera to follow player
-    this.cameras.main.setBounds(0, 0, 6000, 600);
+    // Set up camera to follow player with responsive bounds
+    this.cameras.main.setBounds(0, 0, worldWidth, worldHeight);
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
-    this.cameras.main.setDeadzone(100, 100);
 
-    // Adjust camera to show more of the level below the player
-    this.cameras.main.setFollowOffset(0, 100);
+    // Adjust camera deadzone based on screen size
+    const deadzoneWidth = width * 0.3;
+    const deadzoneHeight = height * 0.3;
+    this.cameras.main.setDeadzone(deadzoneWidth, deadzoneHeight);
+
+    // Adjust camera offset based on screen height
+    const offsetY = height * 0.2;
+    this.cameras.main.setFollowOffset(0, offsetY);
 
     // Set up collisions
     this.physics.add.collider(this.player, this.platforms);
@@ -238,117 +306,92 @@ export class DesertScene extends Phaser.Scene {
     // Initialize UI with current values
     this.updateHealthBar(this.player.health);
     this.updateBulletCounter(this.player.ammo);
+
+    // Create touch controls if on mobile
+    if (this.isMobile) {
+      this.createTouchControls();
+    }
   }
 
   private createInstructions(): void {
+    if (this.isMobile) {
+      return;
+    }
     const instructions = [
-      "Controls (click to hide):",
-      "← → or A/D: Move",
-      "↑ W/SPACE: Jump (2x)",
-      "SHIFT: Dash",
-      "X/CTRL: Shoot",
+      "Controls (tap to hide):",
+      "WASD/Arrows - Move",
+      "SPACE - Jump",
+      "SHIFT - Dash",
+      "CLICK - Shoot",
     ];
 
-    const textStyle = {
-      font: "14px Arial",
-      color: "#ffffff",
-      stroke: "#000000",
-      strokeThickness: 2,
-      backgroundColor: "rgba(0,0,0,0.7)",
-      padding: { x: 8, y: 4 },
-    };
-
-    // Create instruction text that follows the camera
-    const instructionsText = this.add
-      .text(10, 120, instructions, textStyle)
+    // Create instructions text that's always visible
+    this.instructionsText = this.add
+      .text(10, 10, instructions.join("\n"), {
+        fontFamily: "Arial",
+        fontSize: "16px",
+        color: "#ffffff",
+        backgroundColor: "#000000",
+        padding: { x: 10, y: 5 },
+      })
       .setScrollFactor(0)
-      .setDepth(100);
+      .setDepth(1000);
 
-    // Make text interactive
-    instructionsText.setInteractive({ useHandCursor: true });
-
-    // Add hover effect
-    instructionsText.on("pointerover", () => {
-      instructionsText.setAlpha(0.8);
-    });
-
-    instructionsText.on("pointerout", () => {
-      instructionsText.setAlpha(1);
-    });
-
-    // Hide on click
-    instructionsText.on("pointerdown", () => {
-      this.tweens.add({
-        targets: instructionsText,
-        alpha: 0,
-        duration: 200,
-        onComplete: () => instructionsText.destroy(),
-      });
+    // Make instructions interactive
+    this.instructionsText.setInteractive();
+    this.instructionsText.on("pointerdown", () => {
+      this.instructionsText.setVisible(!this.instructionsText.visible);
     });
   }
 
   private createScorecard(): void {
-    const scoreStyle = {
-      font: "24px Arial",
-      color: "#ffffff",
-      stroke: "#000000",
-      strokeThickness: 4,
-    };
-
+    // Position score at top right, ensuring it's always visible
     this.scoreText = this.add
-      .text(this.cameras.main.width - 20, 20, "SCORE: 0", scoreStyle)
+      .text(this.scale.width - 20, 20, "SCORE: 0", {
+        fontFamily: "Arial",
+        fontSize: "24px",
+        color: "#ffffff",
+        stroke: "#000000",
+        strokeThickness: 2,
+      })
       .setOrigin(1, 0)
       .setScrollFactor(0)
-      .setDepth(100);
+      .setDepth(1000);
   }
 
   private createHealthBar(): void {
-    // Create health bar background
-    this.healthBar = this.add.graphics().setScrollFactor(0).setDepth(100);
+    // Position health bar at top left, ensuring it's always visible
+    this.healthBar = this.add.graphics().setScrollFactor(0).setDepth(1000);
 
-    // Add health icon and label
-    this.add
-      .text(20, 20, "HEALTH:", {
-        font: "18px Arial",
-        color: "#ffffff",
-        stroke: "#000000",
-        strokeThickness: 3,
-      })
-      .setScrollFactor(0)
-      .setDepth(100);
-
-    // Draw initial health bar
-    this.updateHealthBar(this.player.health);
+    // Update initial health display
+    this.updateHealthBar(100);
   }
 
   private createBulletCounter(): void {
-    const bulletIcon = this.add
-      .image(20, 80, "ammo")
-      .setScrollFactor(0)
-      .setScale(1.5);
-
+    // Position bullet counter below health bar, ensuring it's always visible
     this.bulletCounter = this.add
-      .text(50, 80, `AMMO: ${this.player.ammo}/${this.player.maxAmmo}`, {
-        font: "18px Arial",
+      .text(20, 60, "AMMO: 20/30", {
+        fontFamily: "Arial",
+        fontSize: "20px",
         color: "#ffffff",
         stroke: "#000000",
-        strokeThickness: 3,
+        strokeThickness: 2,
       })
       .setScrollFactor(0)
-      .setOrigin(0, 0.5);
-
-    // Listen for bullet count changes
-    this.events.on("bulletsChanged", (bullets: number) => {
-      this.updateBulletCounter(bullets);
-    });
+      .setDepth(1000);
   }
 
   private updateHealthBar(health: number): void {
     this.healthBar.clear();
 
+    // Adjust health bar size for mobile
+    const barWidth = this.isMobile ? 250 : 200;
+    const barHeight = this.isMobile ? 25 : 20;
+    const barX = this.isMobile ? 120 : 100;
+
     // Draw background (dark red)
     this.healthBar.fillStyle(0x660000);
-    this.healthBar.fillRect(100, 20, 200, 20);
+    this.healthBar.fillRect(barX, 20, barWidth, barHeight);
 
     // Calculate health percentage
     const healthPercent = health / this.player.maxHealth;
@@ -361,11 +404,11 @@ export class DesertScene extends Phaser.Scene {
     );
 
     this.healthBar.fillStyle(healthColor);
-    this.healthBar.fillRect(100, 20, 200 * healthPercent, 20);
+    this.healthBar.fillRect(barX, 20, barWidth * healthPercent, barHeight);
 
     // Draw border
     this.healthBar.lineStyle(2, 0xffffff);
-    this.healthBar.strokeRect(100, 20, 200, 20);
+    this.healthBar.strokeRect(barX, 20, barWidth, barHeight);
   }
 
   private updateBulletCounter(bullets: number): void {
@@ -431,39 +474,16 @@ export class DesertScene extends Phaser.Scene {
       .setDepth(-5);
   }
 
-  private updateBackgrounds(): void {
-    // Get camera position
-    const camX = this.cameras.main.scrollX;
-
-    // Apply different scroll speeds to create parallax effect
-    // The further away the layer, the slower it moves
-
-    // Far dunes move very slowly (distant background)
-    this.dunesFar.tilePositionX = camX * 0.1;
-
-    // Near dunes move at medium speed (middle ground)
-    this.dunesNear.tilePositionX = camX * 0.3;
-
-    // Ground moves at fastest speed (foreground)
-    // Find the ground layer and update it
-    const groundLayer = this.children.list.find(
-      (child) =>
-        child instanceof Phaser.GameObjects.TileSprite && child.depth === -5
-    ) as Phaser.GameObjects.TileSprite;
-
-    if (groundLayer) {
-      groundLayer.tilePositionX = camX * 0.8;
-    }
-  }
-
   private createPlatforms(): void {
     // Create ground platforms with gaps
     let currentX = 0;
-    const groundY = this.game.canvas.height - 40;
+    // Adjust ground level to be closer to bottom of screen for better mobile usage
+    const groundY = this.game.canvas.height * 0.95; // Changed from 0.9 to 0.95 to use more bottom space
     const segmentWidth = 400;
-    const gapWidth = 200; // Increased gap width for more challenge
+    const gapWidth = 150;
 
-    for (let i = 0; i < 15; i++) {
+    // Create ground segments
+    for (let i = 0; i < 25; i++) {
       // Create a ground segment
       const ground = this.platforms.create(
         currentX + segmentWidth / 2,
@@ -473,35 +493,30 @@ export class DesertScene extends Phaser.Scene {
       ground.setScale(segmentWidth / 32, 2).refreshBody();
       ground.setImmovable(true);
 
-      // Move to the next segment position (including gap)
-      currentX += segmentWidth + (i % 3 === 2 ? gapWidth : 0);
+      // Add more predictable gaps for better gameplay
+      const isGap = i % 4 === 3; // More regular gap pattern
+      const gapSize = gapWidth;
+
+      // Move to next segment
+      currentX += segmentWidth + (isGap ? gapSize : 0);
     }
 
-    // Create elevated platforms with better spacing
+    // Adjust elevated platform positions relative to new ground level
     const platformPositions = [
-      // Starting area platforms
-      { x: 300, y: 450, width: 120 },
-      { x: 600, y: 400, width: 120 },
+      // Starting area platforms - adjusted heights for better mobile usage
+      { x: 300, y: groundY - 120, width: 120 }, // First jump platform (lowered)
+      { x: 600, y: groundY - 160, width: 120 }, // Second jump platform (lowered)
+      { x: 900, y: groundY - 200, width: 100 }, // Third jump platform (lowered)
 
-      // Challenge section platforms
-      { x: 1300, y: 300, width: 120 },
-      { x: 1700, y: 250, width: 120 },
-
-      // Mid-level platforms
-      { x: 2400, y: 200, width: 150 },
-      { x: 2800, y: 200, width: 150 },
-
-      // Advanced section platforms
-      { x: 3200, y: 150, width: 120 },
-      { x: 3600, y: 250, width: 120 },
-      { x: 4000, y: 350, width: 120 },
-
-      // Final approach
-      { x: 4400, y: 300, width: 120 },
-      { x: 5200, y: 200, width: 120 },
-
-      // Secret areas
-      { x: 5600, y: 150, width: 100 },
+      // Rest of the platforms adjusted relative to groundY
+      { x: 1300, y: groundY - 240, width: 120 }, // All platforms lowered by 60 units
+      { x: 1500, y: groundY - 180, width: 80 },
+      { x: 1700, y: groundY - 260, width: 120 },
+      { x: 2000, y: groundY - 200, width: 100 },
+      { x: 2300, y: groundY - 160, width: 120 },
+      { x: 2600, y: groundY - 240, width: 100 },
+      { x: 2900, y: groundY - 180, width: 120 },
+      { x: 3200, y: groundY - 210, width: 100 },
     ];
 
     // Create all platforms with proper spacing
@@ -513,104 +528,297 @@ export class DesertScene extends Phaser.Scene {
       );
       plat.setScale(platform.width / 32, 0.5).refreshBody();
       plat.setImmovable(true);
+
+      // Ensure platform collision body is solid
+      plat.body.checkCollision.down = true;
+      plat.body.checkCollision.up = true;
+      plat.body.checkCollision.left = true;
+      plat.body.checkCollision.right = true;
     });
   }
 
   private createMovingPlatforms(): void {
-    const movingPlatformConfigs = [
-      // Vertical moving platforms
+    const movingPlatformData = [
+      // First area moving platforms
       {
-        x: 800,
-        y: 300,
-        movement: { y: 150 }, // Move up/down by 150px
-        duration: 3000,
+        x: 1100,
+        y: 320,
         width: 100,
-      },
-      {
-        x: 1500,
-        y: 250,
-        movement: { y: 100 },
-        duration: 2500,
-        width: 100,
-      },
-      {
-        x: 2200,
-        y: 200,
-        movement: { y: 120 },
-        duration: 2800,
-        width: 100,
+        distance: 200,
+        speed: 100,
+        vertical: false,
       },
 
-      // Horizontal moving platforms
+      // Mid section vertical moving platforms - reduced speeds and improved accessibility
+      // Stepping platform to help reach vertical platforms
       {
-        x: 2800,
-        y: 300,
-        movement: { x: 200 },
-        duration: 4000,
+        x: 2400,
+        y: 380,
+        width: 100,
+        distance: 0,
+        speed: 0,
+        vertical: false,
+        stepping: true,
+      },
+      // First vertical platform - wider and slower
+      {
+        x: 2500,
+        y: 340, // Higher starting position to be reachable
+        width: 120, // Wider platform
+        distance: 150,
+        speed: 30, // Even slower
+        vertical: true,
+      },
+      // Stepping platform between vertical sections
+      {
+        x: 2700,
+        y: 250,
+        width: 80,
+        distance: 0,
+        speed: 0,
+        vertical: false,
+        stepping: true,
+      },
+      // Second vertical platform - wider and slower
+      {
+        x: 2900,
+        y: 300, // Higher starting position
+        width: 120, // Wider platform
+        distance: 200,
+        speed: 35, // Even slower
+        vertical: true,
+      },
+
+      // Horizontal moving platforms for difficult jumps
+      {
+        x: 3300,
+        y: 180,
+        width: 60,
+        distance: 250,
+        speed: 150,
+        vertical: false,
+      },
+      {
+        x: 3700,
+        y: 250,
+        width: 60,
+        distance: 300,
+        speed: 120,
+        vertical: false,
+      },
+
+      // Complex moving platforms in late game
+      {
+        x: 4900,
+        y: 250,
+        width: 80,
+        distance: 180,
+        speed: 100,
+        vertical: false,
+      },
+      // Stepping platform before vertical section
+      {
+        x: 5400,
+        y: 350,
+        width: 80,
+        distance: 0,
+        speed: 0,
+        vertical: false,
+        stepping: true,
+      },
+      // Improved vertical platform with staggered design
+      {
+        x: 5500,
+        y: 320,
+        width: 120, // Wider platform
+        distance: 200,
+        speed: 30, // Even slower for better control
+        vertical: true,
+      },
+      {
+        x: 6000,
+        y: 350,
+        width: 100,
+        distance: 150,
+        speed: 130,
+        vertical: false,
+      },
+      // Stepping platform before vertical section
+      {
+        x: 6300,
+        y: 320,
+        width: 80,
+        distance: 0,
+        speed: 0,
+        vertical: false,
+        stepping: true,
+      },
+      // Improved vertical platform
+      {
+        x: 6400,
+        y: 280,
+        width: 100, // Wider platform
+        distance: 120,
+        speed: 25, // Very slow for better control
+        vertical: true,
+      },
+      {
+        x: 7300,
+        y: 320,
         width: 120,
-      },
-      {
-        x: 3500,
-        y: 250,
-        movement: { x: 150 },
-        duration: 3500,
-        width: 100,
+        distance: 250,
+        speed: 160,
+        vertical: false,
       },
 
-      // Diagonal moving platforms
+      // Vertical ascension challenge - completely redesigned with stepping stones and slower speeds
+      // First section: Starting point
       {
-        x: 4200,
+        x: 7900,
+        y: 400,
+        width: 80,
+        distance: 0,
+        speed: 0,
+        vertical: false,
+        stepping: true,
+      },
+      // First vertical platform
+      {
+        x: 8000,
+        y: 400,
+        width: 120, // Wider platform
+        distance: 300,
+        speed: 30, // Much slower
+        vertical: true,
+      },
+      // Stepping platform for next vertical
+      {
+        x: 8150,
+        y: 300,
+        width: 80,
+        distance: 0,
+        speed: 0,
+        vertical: false,
+        stepping: true,
+      },
+      // Second vertical platform
+      {
+        x: 8300,
+        y: 300,
+        width: 120, // Wider
+        distance: 400,
+        speed: 35, // Slower
+        vertical: true,
+      },
+      // Stepping platform for next vertical
+      {
+        x: 8450,
+        y: 150,
+        width: 80,
+        distance: 0,
+        speed: 0,
+        vertical: false,
+        stepping: true,
+      },
+      // Third vertical platform
+      {
+        x: 8600,
         y: 200,
-        movement: { x: 100, y: 100 },
-        duration: 3000,
-        width: 100,
+        width: 120, // Wider
+        distance: 500,
+        speed: 40, // Slower
+        vertical: true,
+      },
+      // Landing platform at top of vertical section
+      {
+        x: 8750,
+        y: 100,
+        width: 120,
+        distance: 0,
+        speed: 0,
+        vertical: false,
+        stepping: true,
+      },
+
+      // Collapsing platforms section
+      { x: 9000, y: 150, width: 100, distance: 0, speed: 0, collapsing: true },
+      { x: 9300, y: 200, width: 100, distance: 0, speed: 0, collapsing: true },
+      { x: 9600, y: 250, width: 100, distance: 0, speed: 0, collapsing: true },
+
+      // Sand dune surfing platforms
+      {
+        x: 10000,
+        y: 300,
+        width: 120,
+        distance: 600,
+        speed: 200,
+        sandSurfing: true,
       },
       {
-        x: 4800,
+        x: 10500,
+        y: 400,
+        width: 120,
+        distance: 800,
+        speed: 250,
+        sandSurfing: true,
+      },
+
+      // Vertical platforms with horizontal movement for challenging jumps (moved to end game)
+      {
+        x: 11000,
         y: 300,
-        movement: { x: -100, y: -100 },
-        duration: 3500,
         width: 100,
+        distance: 200,
+        speed: 100,
+        vertical: true,
+        horizontalDistance: 200,
+        horizontalSpeed: 80,
+      },
+      {
+        x: 11400,
+        y: 250,
+        width: 100,
+        distance: 300,
+        speed: 120,
+        vertical: true,
+        horizontalDistance: 300,
+        horizontalSpeed: 100,
       },
     ];
 
-    movingPlatformConfigs.forEach((config) => {
+    // Create all moving platforms
+    movingPlatformData.forEach((data) => {
       const platform = this.movingPlatforms.create(
-        config.x,
-        config.y,
-        "platform-sand"
+        data.x,
+        data.y,
+        data.stepping ? "platform-sand" : "platform-sand"
       );
 
-      platform.setScale(config.width / 32, 0.5);
-      platform.refreshBody();
+      platform.setScale(data.width / 32, 0.5).refreshBody();
       platform.setImmovable(true);
-      platform.body.setAllowGravity(false);
 
-      // Add tint to distinguish moving platforms
-      platform.setTint(0xffdd88);
+      // Add visual distinction for stepping platforms
+      if (data.stepping) {
+        platform.setTint(0xffcc66); // Give stepping platforms a golden tint
+      }
 
-      // Create movement tween
-      this.tweens.add({
-        targets: platform,
-        x: config.movement.x ? platform.x + config.movement.x : platform.x,
-        y: config.movement.y ? platform.y + config.movement.y : platform.y,
-        duration: config.duration,
-        ease: "Sine.easeInOut",
-        yoyo: true,
-        repeat: -1,
-      });
+      // Store platform properties for movement
+      platform.setData("startPosition", { x: data.x, y: data.y });
+      platform.setData("distance", data.distance);
+      platform.setData("speed", data.speed);
+      platform.setData("vertical", data.vertical);
+      platform.setData("direction", 1);
+      platform.setData("collapsing", data.collapsing || false);
+      platform.setData("sandSurfing", data.sandSurfing || false);
+      platform.setData("stepping", data.stepping || false);
+      platform.setData("collapseTimer", 0);
+      platform.setData("horizontalDistance", data.horizontalDistance || 0);
+      platform.setData("horizontalSpeed", data.horizontalSpeed || 0);
+      platform.setData("horizontalDirection", 1);
 
-      // Add particle trail
-      this.add.particles(0, 0, "sand-particle", {
-        follow: platform,
-        frequency: 100,
-        scale: { start: 0.2, end: 0 },
-        speed: 50,
-        lifespan: 1000,
-        alpha: { start: 0.5, end: 0 },
-        tint: 0xffdd88,
-        blendMode: "ADD",
-      });
+      // Set friction for better player movement
+      platform.body.friction.x = 1;
+      platform.body.friction.y = 0;
     });
   }
 
@@ -713,65 +921,161 @@ export class DesertScene extends Phaser.Scene {
       frameRate: 12,
       repeat: 0,
     });
+
+    // Update sandworm animations
+    this.anims.create({
+      key: "sandworm-move",
+      frames: this.anims.generateFrameNumbers("sandworm", {
+        frames: [0, 1, 2, 3, 2, 1], // Sequence for undulating movement
+      }),
+      frameRate: 8,
+      repeat: -1,
+    });
+
+    this.anims.create({
+      key: "sandworm-burrow",
+      frames: this.anims.generateFrameNumbers("sandworm", {
+        frames: [4, 5, 6, 7], // Sequence for burrowing
+      }),
+      frameRate: 12,
+      repeat: 0,
+    });
+
+    this.anims.create({
+      key: "sandworm-emerge",
+      frames: this.anims.generateFrameNumbers("sandworm", {
+        frames: [7, 6, 5, 4], // Reverse sequence for emerging
+      }),
+      frameRate: 12,
+      repeat: 0,
+    });
+
+    // Create harkonnen animations
+    this.anims.create({
+      key: "harkonnen-move",
+      frames: this.anims.generateFrameNumbers("harkonnen", {
+        start: 0,
+        end: 3,
+      }),
+      frameRate: 10,
+      repeat: -1,
+    });
+
+    // Create ornithopter animations
+    this.anims.create({
+      key: "ornithopter-move",
+      frames: this.anims.generateFrameNumbers("ornithopter", {
+        start: 0,
+        end: 3,
+      }),
+      frameRate: 12,
+      repeat: -1,
+    });
   }
 
   private createDestructibleObjects(): void {
-    // Add destructible objects throughout the level
-    const positions = [
-      { x: 400, y: 500 },
-      { x: 800, y: 400 },
-      { x: 1200, y: 300 },
-      { x: 1400, y: 50 },
-      { x: 1800, y: 50 },
-      { x: 2200, y: 100 },
-      { x: 2600, y: 200 },
-      { x: 3000, y: 300 },
-      { x: 3400, y: 250 },
-      { x: 3800, y: 150 },
-      { x: 4200, y: 50 },
-      { x: 4500, y: 50 },
+    // Create destructible objects that block the path or hide secrets
+    const destructiblePositions = [
+      // Blocking access to ammo
+      { x: 500, y: 480, health: 1 },
+
+      // Blocking a shortcut
+      { x: 1800, y: 250, health: 2 },
+
+      // Blocking secret areas
+      { x: 2400, y: 80, health: 3 },
+      { x: 3900, y: 80, health: 3 },
+
+      // Puzzle elements
+      { x: 6000, y: 380, health: 2 },
+      { x: 6200, y: 380, health: 2 },
+      { x: 6400, y: 380, health: 2 },
+
+      // Combat challenges
+      { x: 4300, y: 320, health: 1 },
+      { x: 4400, y: 320, health: 1 },
+      { x: 4500, y: 320, health: 1 },
+
+      // Final challenge
+      { x: 7600, y: 380, health: 3 },
+      { x: 7650, y: 380, health: 3 },
+      { x: 7700, y: 380, health: 3 },
     ];
 
-    positions.forEach((pos) => {
-      const destructible = new DestructibleObject(this, pos.x, pos.y);
-      this.destructibles.add(destructible);
+    // Create all destructible objects
+    destructiblePositions.forEach((pos) => {
+      const destructible = this.destructibles.create(
+        pos.x,
+        pos.y,
+        "destructible"
+      );
+      destructible.setData("health", pos.health || 1);
+      destructible.setImmovable(true);
+      destructible.refreshBody();
+
+      // Color based on health/strength
+      if (pos.health === 2) {
+        destructible.setTint(0xffaa00);
+      } else if (pos.health === 3) {
+        destructible.setTint(0xff4400);
+      }
     });
   }
 
   private createEnemies(): void {
-    // Add enemies throughout the level - adjusted for new platform positions
+    // Create enemies throughout the level with different patterns
     const enemyPositions = [
-      // Early game - sparse enemies
-      { x: 700, y: 350 },
-      { x: 1100, y: 300 },
+      // Early enemies
+      { x: 800, y: 400, patrol: 200, speed: 50, type: "basic" },
+      { x: 1200, y: 400, patrol: 150, speed: 60, type: "basic" },
 
-      // First challenge section
-      { x: 1600, y: 200 },
-      { x: 2100, y: 150 },
+      // Platform enemies
+      { x: 1700, y: 200, patrol: 100, speed: 70, type: "basic" },
+      { x: 2800, y: 150, patrol: 150, speed: 80, type: "basic" },
 
-      // Mid-level
-      { x: 2600, y: 150 },
-      { x: 3000, y: 150 },
+      // Combat arena enemies
+      { x: 4300, y: 300, patrol: 250, speed: 100, type: "harkonnen" },
+      { x: 4700, y: 250, patrol: 150, speed: 90, type: "harkonnen" },
 
-      // Vertical challenge - more difficult
-      { x: 3400, y: 100 },
-      { x: 3800, y: 200 },
-      { x: 4200, y: 300 },
+      // Advanced enemies
+      { x: 5500, y: 300, patrol: 200, speed: 120, type: "harkonnen" },
+      { x: 6300, y: 300, patrol: 180, speed: 110, type: "harkonnen" },
+      { x: 6700, y: 200, patrol: 150, speed: 130, type: "ornithopter" },
 
-      // Final approach - most challenging
-      { x: 4600, y: 250 },
-      { x: 5000, y: 200 },
-      { x: 5400, y: 150 },
+      // Vertical challenge enemies
+      { x: 8000, y: 300, patrol: 300, speed: 150, type: "ornithopter" },
+      { x: 8500, y: 200, patrol: 400, speed: 170, type: "ornithopter" },
+      { x: 9000, y: 100, patrol: 500, speed: 190, type: "sandworm" },
+
+      // Final challenge enemies
+      { x: 10000, y: 200, patrol: 600, speed: 200, type: "sandworm" },
+      { x: 10500, y: 300, patrol: 700, speed: 220, type: "sandworm" },
     ];
 
+    // Create all enemies
     enemyPositions.forEach((pos) => {
-      const enemy = new Enemy(this, pos.x, pos.y);
-      enemy.setPlayer(this.player);
+      let enemy;
+      switch (pos.type) {
+        case "harkonnen":
+          enemy = new HarkonnenEnemy(this, pos.x, pos.y, pos.patrol, pos.speed);
+          break;
+        case "ornithopter":
+          enemy = new OrnithopterEnemy(
+            this,
+            pos.x,
+            pos.y,
+            pos.patrol,
+            pos.speed
+          );
+          break;
+        case "sandworm":
+          enemy = new SandwormEnemy(this, pos.x, pos.y, pos.patrol, pos.speed);
+          break;
+        default:
+          enemy = new Enemy(this, pos.x, pos.y, pos.patrol, pos.speed);
+      }
       this.enemies.add(enemy);
     });
-
-    // Set up collision between enemies and platforms
-    this.physics.add.collider(this.enemies, this.platforms);
   }
 
   private handlePlayerEnemyCollision(
@@ -781,6 +1085,9 @@ export class DesertScene extends Phaser.Scene {
     // Cast to proper types
     const p = player as Player;
     const e = enemy as Enemy;
+
+    // Check if both bodies exist
+    if (!p.body || !e.body) return;
 
     // Check if player is jumping on enemy from above
     if (p.body.touching.down && e.body.touching.up) {
@@ -797,29 +1104,19 @@ export class DesertScene extends Phaser.Scene {
     bullet: Phaser.GameObjects.GameObject,
     enemy: Phaser.GameObjects.GameObject
   ): void {
-    // Cast to proper types
-    const b = bullet as Phaser.Physics.Arcade.Sprite;
+    if (!bullet || !enemy) return;
+
     const e = enemy as Enemy;
-
-    // Destroy bullet
-    b.destroy();
-
-    // Damage enemy
-    const enemyDefeated = e.takeDamage(1);
-
-    // Add score if enemy was defeated
-    if (enemyDefeated) {
-      this.registry.values.score += 100;
-      this.events.emit("scoreChanged");
-
-      // Track enemies defeated
+    if (e && e.body && typeof e.takeDamage === "function") {
+      e.takeDamage(1);
       this.enemiesDefeated++;
-      this.registry.set("enemiesDefeated", this.enemiesDefeated);
     }
 
-    // Track ammo used
-    this.ammoUsed++;
-    this.registry.set("ammoUsed", this.ammoUsed);
+    const b = bullet as Phaser.Physics.Arcade.Sprite;
+    if (b && b.body) {
+      b.destroy();
+      this.ammoUsed++;
+    }
   }
 
   private handleBulletCollision(
@@ -870,27 +1167,53 @@ export class DesertScene extends Phaser.Scene {
         this.registry.set("score", currentScore + 10);
         this.events.emit("scoreChanged");
 
-        // Play sound
-        this.sound.play("coin", { volume: 0.5 });
+        // Play sound safely
+        this.playSoundWithFallback("coin", { volume: 0.5 });
         break;
 
       case "health":
-        // Increase player health
+        // Only heal if not at max health
         if (this.player.health < this.player.maxHealth) {
-          this.player.health += 1;
-          this.events.emit("healthChanged");
-        }
+          const healAmount = collectibleSprite.getData("value") || 1;
+          this.player.health = Math.min(
+            this.player.maxHealth,
+            this.player.health + healAmount
+          );
+          this.events.emit("healthChanged", this.player.health);
 
-        // Play sound
-        this.sound.play("ammo", { volume: 0.5 });
+          // Play sound safely
+          this.playSoundWithFallback("ammo", { volume: 0.5 });
+
+          // Create floating text
+          const healthText = this.add.text(
+            collectibleSprite.x,
+            collectibleSprite.y - 20,
+            `+${healAmount} HP`,
+            {
+              font: "16px Arial",
+              color: "#00ff00",
+              stroke: "#000000",
+              strokeThickness: 3,
+            }
+          );
+
+          // Animate and remove the text
+          this.tweens.add({
+            targets: healthText,
+            y: healthText.y - 40,
+            alpha: 0,
+            duration: 1000,
+            onComplete: () => healthText.destroy(),
+          });
+        }
         break;
 
       case "power-up":
         // Give player a power-up (e.g., temporary invincibility or damage boost)
         this.player.activatePowerUp();
 
-        // Play sound
-        this.sound.play("ammo", { volume: 0.7 });
+        // Play sound safely
+        this.playSoundWithFallback("ammo", { volume: 0.7 });
         break;
 
       case "puzzle":
@@ -898,8 +1221,8 @@ export class DesertScene extends Phaser.Scene {
         const puzzleId = collectibleSprite.getData("puzzleId");
         this.unlockPuzzleDoor(puzzleId);
 
-        // Play sound
-        this.sound.play("coin", { volume: 0.7 });
+        // Play sound safely
+        this.playSoundWithFallback("coin", { volume: 0.7 });
         break;
     }
 
@@ -958,8 +1281,8 @@ export class DesertScene extends Phaser.Scene {
     // Cast to sprite
     const ammoSprite = ammo as Phaser.Physics.Arcade.Sprite;
 
-    // Play collect sound
-    this.sound.play("ammo", { volume: 0.5 });
+    // Play collect sound safely
+    this.playSoundWithFallback("ammo", { volume: 0.5 });
 
     // Add ammo
     this.player.addBullets(5);
@@ -986,66 +1309,132 @@ export class DesertScene extends Phaser.Scene {
   }
 
   private createCollectibles(): void {
-    // Create coins throughout the level - adjusted for new platform positions
+    // Create more coins throughout the level with interesting patterns
     const coinPositions = [
       // Starting area coins
-      { x: 300, y: 400 },
+      { x: 200, y: 400 },
+      { x: 300, y: 380 },
+      { x: 400, y: 400 },
+
+      // Platform coins
       { x: 600, y: 350 },
-      { x: 900, y: 300 },
+      { x: 650, y: 350 },
+      { x: 700, y: 350 },
 
-      // Challenge section coins
+      // Coins that form a "jump here" arrow
+      { x: 1000, y: 400 },
+      { x: 1000, y: 350 },
+      { x: 1000, y: 300 },
+      { x: 1000, y: 250 },
+      { x: 1050, y: 300 },
+      { x: 950, y: 300 },
+
+      // Platform jumps with rewards
       { x: 1300, y: 250 },
+      { x: 1400, y: 250 },
+      { x: 1500, y: 300 },
+      { x: 1600, y: 300 },
       { x: 1700, y: 200 },
-      { x: 2000, y: 150 },
+      { x: 1800, y: 200 },
 
-      // Rest area coins
-      { x: 2400, y: 150 },
+      // Vertical climb coins
+      { x: 2200, y: 350 },
+      { x: 2250, y: 270 },
+      { x: 2300, y: 190 },
+      { x: 2350, y: 110 },
+
+      // Bridge coins over dangerous area
+      { x: 2500, y: 250 },
+      { x: 2600, y: 250 },
+      { x: 2700, y: 150 },
       { x: 2800, y: 150 },
+      { x: 2900, y: 150 },
+      { x: 3000, y: 150 },
+      { x: 3100, y: 150 },
 
-      // Vertical challenge coins
-      { x: 3200, y: 100 },
+      // Precision jumping challenge
+      { x: 3400, y: 100 },
       { x: 3600, y: 200 },
-      { x: 4000, y: 300 },
+      { x: 3800, y: 300 },
+      { x: 4000, y: 200 },
 
-      // Final approach coins
-      { x: 4400, y: 250 },
-      { x: 4800, y: 200 },
-      { x: 5200, y: 150 },
+      // Combat arena rewards
+      { x: 4300, y: 300 },
+      { x: 4400, y: 300 },
+      { x: 4500, y: 300 },
+      { x: 4600, y: 250 },
+      { x: 4700, y: 250 },
+      { x: 4800, y: 250 },
 
-      // Secret area coins
-      { x: 5600, y: 100 },
+      // Precision jumping rewards
+      { x: 5000, y: 150 },
+      { x: 5200, y: 200 },
+      { x: 5400, y: 250 },
+      { x: 5600, y: 300 },
+      { x: 5800, y: 250 },
+
+      // Puzzle area rewards
+      { x: 6100, y: 350 },
+      { x: 6300, y: 300 },
+      { x: 6500, y: 250 },
+      { x: 6700, y: 200 },
+      { x: 6900, y: 150 },
+
+      // Final approach spiral pattern
+      { x: 7100, y: 300 },
+      { x: 7150, y: 270 },
+      { x: 7200, y: 240 },
+      { x: 7250, y: 210 },
+      { x: 7300, y: 180 },
+      { x: 7350, y: 210 },
+      { x: 7400, y: 240 },
+      { x: 7450, y: 270 },
+      { x: 7500, y: 300 },
+
+      // Secret areas
+      { x: 7000, y: 100 },
+      { x: 6200, y: 50 },
+      { x: 5300, y: 50 },
+      { x: 3900, y: 50 },
+      { x: 2400, y: 50 },
     ];
 
-    // Create coins
+    // Create all coins
     coinPositions.forEach((pos) => {
       const coin = this.collectibles.create(pos.x, pos.y, "coin");
-      coin.play("coin-spin");
       coin.setData("type", "coin");
+      coin.setData("value", 10);
       coin.body.setAllowGravity(false);
-      coin.body.setImmovable(true);
     });
 
-    // Create ammo pickups - strategically placed
+    // Set up ammo pickups throughout the level
     const ammoPositions = [
-      { x: 800, y: 450 }, // Early game
-      { x: 1500, y: 300 }, // Before first challenge
-      { x: 2200, y: 200 }, // Mid-level
-      { x: 3000, y: 250 }, // Before vertical challenge
-      { x: 3800, y: 350 }, // After vertical challenge
-      { x: 4600, y: 250 }, // Final approach
-      { x: 5400, y: 150 }, // Secret area
+      { x: 500, y: 450 },
+      { x: 1200, y: 350 },
+      { x: 2000, y: 200 },
+      { x: 2600, y: 300 },
+      { x: 3200, y: 150 },
+      { x: 3800, y: 100 },
+      { x: 4500, y: 250 },
+      { x: 5300, y: 150 },
+      { x: 6000, y: 300 },
+      { x: 6800, y: 150 },
+      { x: 7500, y: 350 },
     ];
 
+    // Create all ammo pickups
     ammoPositions.forEach((pos) => {
       const ammo = this.ammoPickups.create(pos.x, pos.y, "ammo");
       ammo.setData("type", "ammo");
-      ammo.body.setAllowGravity(false);
-      ammo.body.setImmovable(true);
+      if (ammo.body) {
+        ammo.body.allowGravity = false;
+        ammo.body.immovable = true;
+      }
 
       // Add floating animation
       this.tweens.add({
         targets: ammo,
-        y: pos.y - 10,
+        y: pos.y - 5,
         duration: 1500,
         yoyo: true,
         repeat: -1,
@@ -1053,23 +1442,74 @@ export class DesertScene extends Phaser.Scene {
       });
     });
 
-    // Create health packs - placed at critical points
+    // Create health pickups in challenging areas
     const healthPositions = [
-      { x: 1800, y: 200 }, // After first challenge
-      { x: 3400, y: 250 }, // During vertical challenge
-      { x: 5000, y: 200 }, // Near end
+      { x: 2300, y: 450 },
+      { x: 4000, y: 400 },
+      { x: 5500, y: 250 },
+      { x: 7000, y: 350 },
     ];
 
+    // Create all health pickups
     healthPositions.forEach((pos) => {
-      const healthPack = this.collectibles.create(pos.x, pos.y, "health-pack");
-      healthPack.setData("type", "health");
-      healthPack.body.setAllowGravity(false);
-      healthPack.body.setImmovable(true);
+      const health = this.collectibles.create(pos.x, pos.y, "health-pack");
+      health.setData("type", "health");
+      health.setData("value", 2);
+      health.body.setAllowGravity(false);
+      health.body.setImmovable(true);
+    });
 
-      // Add pulsing animation
+    // Create power-ups in strategic locations
+    const powerUpPositions = [
+      { x: 3500, y: 100 },
+      { x: 6200, y: 150 },
+    ];
+
+    // Create all power-ups
+    powerUpPositions.forEach((pos) => {
+      const powerUp = this.collectibles.create(pos.x, pos.y, "power-up");
+      powerUp.setData("type", "power-up");
+      powerUp.body.setAllowGravity(false);
+      powerUp.body.setImmovable(true);
+
+      // Add a pulsing effect to make power-ups more visible
       this.tweens.add({
-        targets: healthPack,
+        targets: powerUp,
         scale: 1.2,
+        duration: 500,
+        yoyo: true,
+        repeat: -1,
+      });
+    });
+
+    // Add spice collectibles in challenging locations
+    const spicePositions = [
+      { x: 8200, y: 150 },
+      { x: 8800, y: 100 },
+      { x: 9500, y: 200 },
+      { x: 10200, y: 250 },
+      { x: 10800, y: 300 },
+    ];
+
+    spicePositions.forEach((pos) => {
+      const spice = this.collectibles.create(pos.x, pos.y, "spice");
+      spice.setData("type", "spice");
+      spice.setData("value", 50);
+      spice.body.setAllowGravity(false);
+
+      // Add floating and glowing effect
+      this.tweens.add({
+        targets: spice,
+        y: pos.y - 10,
+        duration: 1500,
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.easeInOut",
+      });
+
+      this.tweens.add({
+        targets: spice,
+        alpha: 0.7,
         duration: 1000,
         yoyo: true,
         repeat: -1,
@@ -1127,36 +1567,21 @@ export class DesertScene extends Phaser.Scene {
   }
 
   private createLevelExit(): void {
-    // Create a level exit at the end of the level
-    this.levelExit = this.physics.add.sprite(5800, 400, "puzzle-door");
+    this.levelExit = this.physics.add.sprite(7800, 470, "exit");
     this.levelExit.setScale(2);
+    this.levelExit.setImmovable(true);
+    if (this.levelExit.body) {
+      (this.levelExit.body as Phaser.Physics.Arcade.Body).allowGravity = false;
+    }
 
-    // Use the physics body directly
-    const body = this.levelExit.body as Phaser.Physics.Arcade.Body;
-    body.setImmovable(true);
-    body.setAllowGravity(false);
-
-    // Add a glow effect
+    // Visual indicator for the exit
+    const light = this.add.pointlight(7800, 470, 0xffffff, 100, 0.5);
     this.tweens.add({
-      targets: this.levelExit,
-      alpha: 0.7,
+      targets: light,
+      intensity: 1,
       duration: 1000,
       yoyo: true,
       repeat: -1,
-    });
-
-    // Add particles around the exit
-    const particles = this.add.particles(0, 0, "sand-particle", {
-      x: this.levelExit.x,
-      y: this.levelExit.y,
-      speed: { min: 20, max: 50 },
-      angle: { min: 0, max: 360 },
-      scale: { start: 0.2, end: 0 },
-      lifespan: 2000,
-      quantity: 1,
-      frequency: 200,
-      blendMode: "ADD",
-      tint: 0xffff00,
     });
 
     // Add collision with player
@@ -1198,50 +1623,345 @@ export class DesertScene extends Phaser.Scene {
     this.scene.pause();
   }
 
-  update(time: number, delta: number): void {
-    // Update input system
-    this.inputSystem.update(time, delta);
+  protected createTouchControls(): void {
+    // Check if touch controls already exist
+    if (this.touchControls) {
+      // Just update positions if needed
+      this.updateTouchControlPositions();
+      return;
+    }
 
-    // Update player
+    const width = this.scale.width;
+    const height = this.scale.height;
+    const isLandscape = width > height;
+
+    // Calculate button sizes based on screen dimensions
+    const minSize = Math.min(width, height);
+    const buttonSize = isLandscape ? minSize * 0.15 : minSize * 0.2;
+    const buttonAlpha = 0.4;
+
+    // Calculate positions relative to screen dimensions
+    const padding = buttonSize * 0.3;
+    const baseY = height - padding - buttonSize;
+
+    // Left side controls (movement)
+    const leftX = padding + buttonSize;
+    const rightX = padding + buttonSize * 2.5;
+
+    // Right side controls (actions)
+    const jumpX = width - padding - buttonSize * 2.5;
+    const shootX = width - padding - buttonSize;
+    const dashX = width - padding - buttonSize * 1.75;
+    const dashY = baseY - buttonSize * 1.2;
+
+    // Create buttons with improved visual feedback and larger touch areas
+    const createButton = (
+      x: number,
+      y: number,
+      color: number
+    ): Phaser.GameObjects.Container => {
+      const circle = this.add.circle(0, 0, buttonSize / 2, color, buttonAlpha);
+      const hitArea = this.add.circle(0, 0, buttonSize / 1.5, color, 0);
+      const container = this.add
+        .container(x, y, [hitArea, circle])
+        .setScrollFactor(0)
+        .setDepth(100)
+        .setSize(buttonSize * 1.5, buttonSize * 1.5)
+        .setInteractive({ useHandCursor: true });
+
+      // Add visual indicator
+      const icon = this.add.circle(0, 0, buttonSize / 6, 0xffffff, 0.3);
+      container.add(icon);
+
+      return container;
+    };
+
+    // Create controls with proper spacing and visual indicators
+    this.touchControls = {
+      left: createButton(leftX, baseY, 0x0044ff) as any,
+      right: createButton(rightX, baseY, 0x0044ff) as any,
+      jump: createButton(jumpX, baseY, 0x00ff44) as any,
+      shoot: createButton(shootX, baseY, 0xff4444) as any,
+      dash: createButton(dashX, dashY, 0xffff44) as any,
+    };
+
+    // Set up touch handlers
+    this.setupTouchControlHandlers();
+  }
+
+  private updateTouchControlPositions(): void {
+    if (!this.touchControls) return;
+
+    const width = this.scale.width;
+    const height = this.scale.height;
+    const isLandscape = width > height;
+    const minSize = Math.min(width, height);
+    const buttonSize = isLandscape ? minSize * 0.15 : minSize * 0.2;
+    const padding = buttonSize * 0.3;
+    const baseY = height - padding - buttonSize;
+
+    // Update positions
+    const leftX = padding + buttonSize;
+    const rightX = padding + buttonSize * 2.5;
+    const jumpX = width - padding - buttonSize * 2.5;
+    const shootX = width - padding - buttonSize;
+    const dashX = width - padding - buttonSize * 1.75;
+    const dashY = baseY - buttonSize * 1.2;
+
+    // Update each control position
+    this.touchControls.left.setPosition(leftX, baseY);
+    this.touchControls.right.setPosition(rightX, baseY);
+    this.touchControls.jump.setPosition(jumpX, baseY);
+    this.touchControls.shoot.setPosition(shootX, baseY);
+    this.touchControls.dash.setPosition(dashX, dashY);
+  }
+
+  private setupTouchControlHandlers(): void {
+    const handleTouch = (
+      button: Phaser.GameObjects.Container,
+      control: string,
+      isDown: boolean
+    ) => {
+      const circle = button.list[1] as Phaser.GameObjects.Arc;
+      const icon = button.list[2] as Phaser.GameObjects.Arc;
+
+      if (isDown) {
+        // Visual feedback
+        this.tweens.add({
+          targets: [circle, icon],
+          scaleX: 0.9,
+          scaleY: 0.9,
+          duration: 50,
+        });
+        circle.setAlpha(0.8);
+
+        // Update control state
+        this.registry.set(`virtual${control}`, true);
+        this.player.setTouchControlState(control.toLowerCase() as any, true);
+      } else {
+        // Reset visual state
+        this.tweens.add({
+          targets: [circle, icon],
+          scaleX: 1,
+          scaleY: 1,
+          duration: 100,
+        });
+        circle.setAlpha(0.4);
+
+        // Reset control state
+        this.registry.set(`virtual${control}`, false);
+        this.player.setTouchControlState(control.toLowerCase() as any, false);
+      }
+    };
+
+    // Set up each control
+    Object.entries(this.touchControls).forEach(([key, button]) => {
+      const control = key.charAt(0).toUpperCase() + key.slice(1);
+
+      button.on("pointerdown", () => handleTouch(button, control, true));
+      button.on("pointerup", () => handleTouch(button, control, false));
+      button.on("pointerout", () => handleTouch(button, control, false));
+    });
+  }
+
+  // Helper method for safe audio playback
+  private playSoundWithFallback(
+    key: string,
+    config?: Phaser.Types.Sound.SoundConfig
+  ): void {
+    try {
+      if (this.sound.get(key)) {
+        this.sound.play(key, config);
+      }
+    } catch (error) {
+      console.warn(`Error playing sound ${key}:`, error);
+    }
+  }
+
+  update(time: number, delta: number): void {
+    // Update player and enemies
     this.player.update(time, delta);
 
+    // Update each enemy
+    this.enemies.getChildren().forEach((child) => {
+      const enemy = child as Enemy;
+      enemy.update(time, delta);
+    });
+
+    // Update moving platforms
+    this.updateMovingPlatforms(delta);
+
+    // Update inputSystem
+    this.inputSystem.update(time, delta);
+
     // Update background parallax
-    this.updateBackgrounds();
+    this.updateBackgrounds(delta);
+  }
 
-    // Update enemies
-    this.enemies.getChildren().forEach((enemy) => {
-      (enemy as Enemy).update(time, delta);
-    });
+  // Update moving platforms and their collision effects
+  protected updateMovingPlatforms(delta: number): void {
+    this.movingPlatforms
+      .getChildren()
+      .forEach((platform: Phaser.GameObjects.GameObject) => {
+        const p = platform as Phaser.Physics.Arcade.Sprite;
+        if (!p.body) return;
 
-    // Check if player fell out of bounds
-    if (this.player.y > this.physics.world.bounds.height) {
-      // Reset player to a safe position
-      this.player.setPosition(100, 100);
-      this.player.setVelocity(0, 0);
+        const startPos = p.getData("startPosition");
+        const distance = p.getData("distance");
+        const speed = p.getData("speed");
+        const vertical = p.getData("vertical");
+        const direction = p.getData("direction");
+        const horizontalDistance = p.getData("horizontalDistance");
+        const horizontalSpeed = p.getData("horizontalSpeed");
+        const horizontalDirection = p.getData("horizontalDirection");
 
-      // Deduct points for falling
-      const registry = this.registry.values as Record<string, number>;
-      if (registry.score > 100) {
-        registry.score -= 100;
-      } else {
-        registry.score = 0;
-      }
-      this.events.emit("scoreChanged");
+        if (
+          !startPos ||
+          typeof distance !== "number" ||
+          typeof speed !== "number"
+        )
+          return;
+
+        // Store previous position
+        const prevX = p.x;
+        const prevY = p.y;
+
+        // Calculate movement
+        const velocity = speed * direction;
+        const horizontalVelocity = horizontalSpeed
+          ? horizontalSpeed * horizontalDirection
+          : 0;
+
+        // Apply vertical movement
+        if (vertical) {
+          // Apply slower movement for vertical platforms
+          const smoothFactor = 0.8; // Reduce jerkiness
+          p.y += velocity * (delta / 1000) * smoothFactor;
+
+          // Check vertical boundaries
+          if (p.y > startPos.y + distance || p.y < startPos.y - distance) {
+            p.setData("direction", -direction);
+
+            // If at boundary point, fix position to avoid overshooting
+            if (p.y > startPos.y + distance) {
+              p.y = startPos.y + distance;
+            } else if (p.y < startPos.y - distance) {
+              p.y = startPos.y - distance;
+            }
+
+            // Slow down at the edges to prevent player from being thrown off
+            p.setData("pauseTime", 300); // Short pause at endpoints
+          }
+
+          // Apply pause at endpoints
+          const pauseTime = p.getData("pauseTime");
+          if (pauseTime && pauseTime > 0) {
+            p.setData("pauseTime", pauseTime - delta);
+            return; // Skip rest of update while paused
+          }
+        }
+
+        // Apply horizontal movement if platform has horizontal movement
+        if (horizontalDistance) {
+          p.x += horizontalVelocity * (delta / 1000);
+
+          // Check horizontal boundaries
+          if (
+            p.x > startPos.x + horizontalDistance ||
+            p.x < startPos.x - horizontalDistance
+          ) {
+            p.setData("horizontalDirection", -horizontalDirection);
+          }
+        } else if (!vertical) {
+          // Regular horizontal movement for non-vertical platforms
+          p.x += velocity * (delta / 1000);
+
+          if (p.x > startPos.x + distance || p.x < startPos.x - distance) {
+            p.setData("direction", -direction);
+          }
+        }
+
+        // Update physics body
+        p.body.updateFromGameObject();
+
+        // Check if player is standing on this platform
+        const isPlayerOnPlatform =
+          this.player.body.touching.down && p.body.touching.up;
+
+        // Check if player is clinging to sides (for vertical platforms)
+        const isPlayerClingingToSides =
+          vertical &&
+          ((this.player.body.touching.left && p.body.touching.right) ||
+            (this.player.body.touching.right && p.body.touching.left));
+
+        // Move player with platform if they're standing on it
+        if (isPlayerOnPlatform) {
+          // For all platforms, move player horizontally with platform
+          if (horizontalDistance || !vertical) {
+            const dx = p.x - prevX;
+            this.player.x += dx;
+          }
+
+          // For vertical platforms only
+          if (vertical) {
+            const dy = p.y - prevY;
+
+            // If platform is moving down, move player down with it
+            if (dy > 0) {
+              this.player.y += dy;
+              // Ensure player stays firmly on platform
+              this.player.setVelocityY(Math.max(0, velocity));
+            }
+
+            // If platform is moving up, move player up with it
+            if (dy < 0) {
+              this.player.y += dy;
+              // Apply slight upward velocity to help player stick
+              this.player.setVelocityY(velocity * 0.9);
+
+              // Prevent oscillation by locking player to platform
+              const platformTop = p.body.position.y;
+              const playerBottom =
+                this.player.body.position.y + this.player.body.height;
+              if (Math.abs(playerBottom - platformTop) < 10) {
+                this.player.body.position.y =
+                  platformTop - this.player.body.height;
+              }
+            }
+          }
+        }
+        // Handle player clinging to sides of vertical platforms
+        else if (isPlayerClingingToSides) {
+          // Allow player to cling to sides and move with platform
+          const dy = p.y - prevY;
+          this.player.y += dy;
+        }
+      });
+  }
+
+  // Update background elements with parallax effect
+  protected updateBackgrounds(delta: number): void {
+    // Get camera position
+    const camX = this.cameras.main.scrollX;
+
+    // Apply different scroll speeds to create parallax effect
+    // The further away the layer, the slower it moves
+
+    // Far dunes move very slowly (distant background)
+    this.dunesFar.tilePositionX = camX * 0.1;
+
+    // Near dunes move at medium speed (middle ground)
+    this.dunesNear.tilePositionX = camX * 0.3;
+
+    // Ground moves at fastest speed (foreground)
+    // Find the ground layer and update it
+    const groundLayer = this.children.list.find(
+      (child) =>
+        child instanceof Phaser.GameObjects.TileSprite && child.depth === -5
+    ) as Phaser.GameObjects.TileSprite;
+
+    if (groundLayer) {
+      groundLayer.tilePositionX = camX * 0.8;
     }
-
-    // Check if player has reached the end of the level
-    if (this.player.x > 5800 && !this.levelComplete) {
-      this.levelComplete = true;
-      this.completeLevel();
-    }
-
-    // Update moving platforms' collisions
-    this.movingPlatforms.children.iterate((platform: any) => {
-      if (platform.body.touching.up && this.player.body.touching.down) {
-        // Make player move with platform
-        this.player.x += platform.body.deltaX();
-        this.player.y += platform.body.deltaY();
-      }
-    });
   }
 }

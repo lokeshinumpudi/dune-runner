@@ -2,7 +2,7 @@ import { Input } from "phaser";
 import { ISystem, InputConfig, IScene } from "../types/game";
 import { IInputHandler } from "../interfaces/IInputHandler";
 
-export class InputSystem implements ISystem {
+export default class InputSystem implements ISystem {
   private scene: IScene;
   private inputConfig: InputConfig;
   private inputHandlers: Set<{ handleInput: () => void }>;

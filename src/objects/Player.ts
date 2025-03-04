@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { IInputHandler } from "../interfaces/IInputHandler.ts";
+import { InputSystem } from "../systems/InputSystem";
 
 export class Player
   extends Phaser.Physics.Arcade.Sprite
@@ -53,6 +54,21 @@ export class Player
   // Override body property with more specific type
   declare body: Phaser.Physics.Arcade.Body;
 
+  // Touch controls state
+  private touchControlsState: {
+    left: boolean;
+    right: boolean;
+    jump: boolean;
+    shoot: boolean;
+    dash: boolean;
+  } = {
+    left: false,
+    right: false,
+    jump: false,
+    shoot: false,
+    dash: false,
+  };
+
   constructor(scene: Phaser.Scene, x: number, y: number) {
     super(scene, x, y, "player");
 
@@ -60,10 +76,14 @@ export class Player
     scene.add.existing(this);
     scene.physics.add.existing(this);
 
-    // Set up physics body
+    // Set up physics body with better collision handling
     this.body.setGravityY(800);
     this.body.setSize(20, 40);
     this.body.setOffset(6, 8);
+    this.body.setCollideWorldBounds(true);
+    this.body.setBounce(0);
+    this.body.setMaxVelocity(500, 800);
+    this.body.setDragX(1000);
 
     // Set up animations
     this.createAnimations();
@@ -175,41 +195,170 @@ export class Player
   }
 
   handleInput(time: number, delta: number): void {
-    // Handle horizontal movement with both arrow keys and WASD
-    const isLeftPressed = this.cursors.left.isDown || this.keyA.isDown;
-    const isRightPressed = this.cursors.right.isDown || this.keyD.isDown;
+    // Skip input handling if player is dead or off-screen
+    if (!this.active || this.isDead || !this.body) return;
 
-    // Check for jump input using JustDown to detect single presses
-    const upArrowJustDown = Phaser.Input.Keyboard.JustDown(this.cursors.up);
-    const wKeyJustDown = Phaser.Input.Keyboard.JustDown(this.keyW);
-    const spaceJustDown = Phaser.Input.Keyboard.JustDown(this.spaceKey);
-    const isJumpJustPressed = upArrowJustDown || wKeyJustDown || spaceJustDown;
+    // Safety check - reset position if somehow went off-screen
+    const gameHeight = Number(this.scene.game.config.height);
+    if (this.y > gameHeight) {
+      this.setPosition(100, 100);
+      this.setVelocity(0, 0);
+      return;
+    }
 
-    const isShiftPressed = this.shiftKey.isDown;
+    // Process keyboard inputs - use existing cursors
+    const leftPressed = this.cursors.left.isDown || this.keyA.isDown;
+    const rightPressed = this.cursors.right.isDown || this.keyD.isDown;
+    const jumpPressed =
+      this.cursors.up.isDown || this.keyW.isDown || this.spaceKey.isDown;
+    const dashPressed = this.shiftKey.isDown;
+    const shootPressed = this.fireButton.isDown;
 
-    // Handle shooting with improved logic
-    const fireKeyPressed =
-      this.fireButton.isDown ||
-      this.scene.input.keyboard!.checkDown(
-        this.scene.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.CTRL),
-        0
-      );
+    // Get virtual control states from registry (for mobile)
+    const virtualLeft = this.scene.registry.get("virtualLeft") || false;
+    const virtualRight = this.scene.registry.get("virtualRight") || false;
+    const virtualJump = this.scene.registry.get("virtualJump") || false;
+    const virtualShoot = this.scene.registry.get("virtualShoot") || false;
+    const virtualDash = this.scene.registry.get("virtualDash") || false;
 
-    if (fireKeyPressed && time > this.lastFired) {
+    // Combine keyboard and touch inputs
+    const left = leftPressed || virtualLeft || this.touchControlsState.left;
+    const right = rightPressed || virtualRight || this.touchControlsState.right;
+    const jump = jumpPressed || virtualJump || this.touchControlsState.jump;
+    const dash = dashPressed || virtualDash || this.touchControlsState.dash;
+    const shoot = shootPressed || virtualShoot || this.touchControlsState.shoot;
+
+    // Moving left/right
+    if (left) {
+      this.move(-1);
+    } else if (right) {
+      this.move(1);
+    } else {
+      this.move(0);
+    }
+
+    // Check if player is on the ground to reset jump state
+    if ((this.body.touching.down || this.body.blocked.down) && this.isJumping) {
+      this.isJumping = false;
+      this.canDoubleJump = false;
+    }
+
+    // Improved jump handling for mobile
+    if (jump) {
+      if (!this.justPressed) {
+        this.justPressed = true;
+        this.jump();
+      }
+    } else {
+      this.justPressed = false;
+      // Allow for variable jump height by cutting velocity if jump released
+      if (this.body.velocity.y < 0) {
+        this.body.velocity.y *= 0.9;
+      }
+    }
+
+    // Dashing
+    if (dash) {
+      this.dash();
+    }
+
+    // Shooting
+    if (shoot && time > this.lastFired) {
       this.shoot();
       this.lastFired = time + this.fireRate;
     }
 
-    // Handle dashing
-    if (isShiftPressed && !this.isDashing && time > this.dashCooldown) {
-      this.isDashing = true;
-      this.dashCooldown = time + this.dashCooldownTime;
+    // Update player animation based on state
+    this.updateAnimation();
 
-      // Apply dash velocity in the direction the player is facing
+    // Update gun position
+    this.updateGun();
+  }
+
+  /**
+   * Handles player movement
+   * @param direction -1 for left, 1 for right, 0 for stop
+   */
+  move(direction: number): void {
+    if (this.isDashing) return; // Don't interrupt dash
+
+    if (direction === -1) {
+      // Move left
+      this.setVelocityX(-200);
+      this.setFlipX(true);
+      this.facing = "left";
+    } else if (direction === 1) {
+      // Move right
+      this.setVelocityX(200);
+      this.setFlipX(false);
+      this.facing = "right";
+    } else {
+      // Stop
+      this.setVelocityX(0);
+    }
+  }
+
+  /**
+   * Handles player jumping with double jump capability
+   */
+  jump(): void {
+    // First jump from ground
+    if (
+      (this.body.touching.down || this.body.blocked.down) &&
+      !this.isJumping
+    ) {
+      this.setVelocityY(-500);
+      this.isJumping = true;
+      this.canDoubleJump = true;
+
+      // Play jump sound with better mobile handling
+      if (this.scene.sound && this.scene.sound.get("jump")) {
+        this.scene.sound.play("jump", { volume: 0.5 });
+      }
+
+      // Add slight screen shake for feedback
+      if (this.scene.cameras && this.scene.cameras.main) {
+        this.scene.cameras.main.shake(50, 0.002);
+      }
+    }
+    // Double jump in mid-air if available
+    else if (this.isJumping && this.canDoubleJump && !this.isDashing) {
+      this.setVelocityY(-400);
+      this.canDoubleJump = false;
+
+      // Play double jump sound
+      if (this.scene.sound && this.scene.sound.get("jump")) {
+        this.scene.sound.play("jump", { volume: 0.3, rate: 1.2 });
+      }
+
+      // Visual feedback for double jump
+      if (this.scene.tweens) {
+        this.scene.tweens.add({
+          targets: this,
+          alpha: 0.7,
+          duration: 100,
+          yoyo: true,
+          repeat: 1,
+        });
+      }
+    }
+  }
+
+  /**
+   * Handles player dashing ability
+   */
+  dash(): void {
+    const currentTime = this.scene.time.now;
+
+    if (!this.isDashing && currentTime > this.dashCooldown) {
+      this.isDashing = true;
+      this.dashCooldown = currentTime + this.dashCooldownTime;
+
+      // Apply dash velocity in facing direction
       const dashVelocity = this.facing === "right" ? 400 : -400;
       this.setVelocityX(dashVelocity);
 
-      // Create a dash effect
+      // Visual effect for dash
       this.scene.tweens.add({
         targets: this,
         alpha: 0.7,
@@ -223,88 +372,68 @@ export class Player
         this.isDashing = false;
       });
     }
+  }
 
-    // Only handle regular movement if not dashing
-    if (!this.isDashing) {
-      if (isLeftPressed) {
-        this.setVelocityX(-200);
-        this.anims.play("walk", true);
-        this.setFlipX(true);
-        this.facing = "left";
-      } else if (isRightPressed) {
-        this.setVelocityX(200);
-        this.anims.play("walk", true);
-        this.setFlipX(false);
-        this.facing = "right";
-      } else {
-        this.setVelocityX(0);
-        this.anims.play("idle", true);
-      }
-    }
+  /**
+   * Updates player animation based on current state
+   */
+  updateAnimation(): void {
+    if (!this.body) return;
 
-    // Handle jumping with both up arrow and W/Space
-    if (isJumpJustPressed) {
-      console.log(
-        "Jump pressed! On ground:",
-        this.body.touching.down,
-        "Can double jump:",
-        this.canDoubleJump
-      );
-
-      if (this.body.touching.down) {
-        // First jump from the ground
-        this.setVelocityY(-500);
-        this.isJumping = true;
-        this.canDoubleJump = true;
-        console.log("First jump executed!");
-
-        // Play jump sound (if available)
-        if (this.scene.sound.get("jump")) {
-          this.scene.sound.play("jump", { volume: 0.5 });
-        }
-      } else if (this.isJumping && this.canDoubleJump) {
-        // Double jump in mid-air
-        this.setVelocityY(-400);
-        this.canDoubleJump = false;
-        console.log("Double jump executed!");
-
-        // Play double jump sound (if available)
-        if (this.scene.sound.get("jump")) {
-          this.scene.sound.play("jump", { volume: 0.3, rate: 1.2 });
-        }
-      }
-    }
-
-    // Reset jump state when landing
-    if (this.body.touching.down) {
-      if (this.isJumping) {
-        console.log("Landed on ground, resetting jump state");
-      }
-      this.isJumping = false;
+    if (this.body.velocity.x !== 0) {
+      this.anims.play("walk", true);
+    } else {
+      this.anims.play("idle", true);
     }
   }
 
+  // Property for death state
+  get isDead(): boolean {
+    return this.health <= 0;
+  }
+
   shoot(): void {
-    // Check if we have bullets left
-    if (this.ammo <= 0) {
-      // Play empty gun sound
-      this.scene.sound.play("empty", { volume: 0.5 });
+    // Check if we can shoot (bullets available and not in cooldown)
+    if (this.ammo <= 0 || !this.canShoot) {
+      // Play empty gun sound only if out of ammo
+      if (this.ammo <= 0) {
+        this.scene.sound.play("empty", { volume: 0.5 });
+      }
       return;
     }
 
+    // Set cooldown to prevent rapid firing
+    this.canShoot = false;
+    this.scene.time.delayedCall(this.fireRate, () => {
+      this.canShoot = true;
+    });
+
     // Create bullet
-    const bullet = this.bullets.create(
+    const bullet = this.bullets.get(
       this.x + (this.flipX ? -20 : 20),
       this.y - 4,
       "bullet"
     );
 
     if (bullet) {
+      // Enable the bullet physics body and make it active
+      bullet.enableBody(
+        true,
+        this.x + (this.flipX ? -20 : 20),
+        this.y - 4,
+        true,
+        true
+      );
+
       // Decrease bullet count
       this.ammo--;
 
       // Update UI
       this.scene.events.emit("bulletsChanged", this.ammo);
+
+      // Track ammo usage for stats
+      this.scene.registry.values.ammoUsed =
+        (this.scene.registry.values.ammoUsed || 0) + 1;
 
       const offsetX = this.facing === "right" ? 25 : -25;
 
@@ -324,6 +453,15 @@ export class Player
       bullet.setVelocityX(this.flipX ? -600 : 600);
       bullet.body.setAllowGravity(false);
 
+      // Set bullet lifespan to auto-destroy after 2 seconds
+      bullet.setActive(true);
+      bullet.setVisible(true);
+      this.scene.time.delayedCall(2000, () => {
+        if (bullet && bullet.body) {
+          bullet.disableBody(true, true);
+        }
+      });
+
       // Play sound
       this.scene.sound.play("shoot", { volume: 0.5 });
 
@@ -339,15 +477,22 @@ export class Player
   }
 
   update(time: number, delta: number): void {
+    // Safety check for physics body
+    if (!this.body) return;
+
+    // Reset position if somehow went off-screen
+    const gameHeight = Number(this.scene.game.config.height);
+    if (this.y > gameHeight) {
+      this.setPosition(100, 100);
+      this.setVelocity(0, 0);
+      return;
+    }
+
     // Update gun position
     const gunOffsetX = this.facing === "right" ? 15 : -15;
-    const gunOffsetY = -5; // Slightly above center
+    const gunOffsetY = -5;
     this.gun.setPosition(this.x + gunOffsetX, this.y + gunOffsetY);
     this.gun.setFlipX(this.facing === "left");
-
-    // Ensure gun is visible and has correct depth
-    this.gun.setVisible(true);
-    this.gun.setDepth(this.depth + 1);
 
     // Calculate FPS
     this.frameCount++;
@@ -387,30 +532,9 @@ export class Player
           `FPS: ${this.fps}\n` +
             `Position: (${worldX}, ${worldY})\n` +
             `Velocity: (${velocityX}, ${velocityY})\n` +
-            `On Ground: ${this.body.touching.down}\n` +
-            `Is Jumping: ${this.isJumping}\n` +
-            `Can Double Jump: ${this.canDoubleJump}\n` +
-            `Is Dashing: ${this.isDashing}\n` +
-            `Dash Ready: ${dashReady}${
-              dashCooldownRemaining ? ` (${dashCooldownRemaining}s)` : ""
-            }\n` +
-            `Memory: ${Math.round(
-              (window.performance as any).memory?.usedJSHeapSize / 1048576 || 0
-            )}MB\n` +
-            `\nPress F1 or Shift+D to toggle debug info`
+            `On Ground: ${this.body.touching.down}\n`
         );
       }
-    }
-
-    // Ensure jump state is properly tracked
-    if (this.body.touching.down) {
-      // Only reset if we were previously in the air
-      if (this.isJumping) {
-        this.isJumping = false;
-      }
-    } else if (!this.isJumping && this.body.velocity.y < 0) {
-      // If we're moving upward and not marked as jumping, we must be jumping
-      this.isJumping = true;
     }
   }
 
@@ -504,6 +628,8 @@ export class Player
    */
   public addBullets(amount: number): void {
     this.ammo = Math.min(this.maxAmmo, this.ammo + amount);
+    // Make sure the player can shoot after picking up ammo
+    this.canShoot = true;
     this.scene.events.emit("bulletsChanged", this.ammo);
   }
 
@@ -534,5 +660,35 @@ export class Player
 
   getBullets(): Phaser.Physics.Arcade.Group {
     return this.bullets;
+  }
+
+  /**
+   * Set the state of a touch control
+   * @param control The control to update
+   * @param isActive Whether the control is active
+   */
+  public setTouchControlState(
+    control: "left" | "right" | "jump" | "shoot" | "dash",
+    isActive: boolean
+  ): void {
+    this.touchControlsState[control] = isActive;
+  }
+
+  private updateGun(): void {
+    if (!this.gun) return;
+
+    // Position the gun relative to the player, with responsive positioning
+    const isMobile =
+      this.scene.sys.game.device.os.android ||
+      this.scene.sys.game.device.os.iOS ||
+      this.scene.scale.width < 800;
+    const offsetX =
+      this.facing === "right" ? (isMobile ? 12 : 20) : isMobile ? -12 : -20;
+    const offsetY = isMobile ? 6 : 0; // Add a slight vertical adjustment for mobile
+
+    this.gun.setPosition(this.x + offsetX, this.y + offsetY);
+
+    // Flip the gun based on player direction
+    this.gun.setFlipX(this.facing === "left");
   }
 }
