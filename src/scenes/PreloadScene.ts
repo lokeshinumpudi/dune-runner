@@ -11,17 +11,18 @@ export class PreloadScene extends Scene {
     this.load.image("bg-dunes-far", "assets/backgrounds/dunes-far.png");
     this.load.image("bg-dunes-near", "assets/backgrounds/dunes-near.png");
 
-    // Load platform sprites
-    this.load.image("platform-sand", "assets/platform-sand.png");
+    // Load platform sprites - fix path
+    this.load.image("platform-sand", "assets/sprites/platform-sand.png");
 
     // Load player spritesheet
     this.load.spritesheet("player", "assets/sprites/player.png", {
       frameWidth: 32,
       frameHeight: 48,
     });
+    
 
-    // Load particle effects
-    this.load.image("sand-particle", "assets/sand-particle.png");
+    // Load particle effects - fix path
+    this.load.image("sand-particle", "assets/particles/sand-particle.png");
     this.load.image("dash-trail", "assets/particles/dash-trail.png");
 
     // Load UI assets
@@ -30,6 +31,10 @@ export class PreloadScene extends Scene {
     this.load.image("checkbox-checked", "assets/ui/checkbox-checked.png");
     this.load.image("logo", "assets/ui/logo.png");
 
+    // Load UI elements - fix paths
+    this.load.image("ui-heart", "assets/ui/heart.png");
+    this.load.image("ui-bullet", "assets/ui/bullet.png");
+
     // Handle audio loading errors
     this.load.on("loaderror", (fileObj: Phaser.Loader.File) => {
       console.warn("Error loading asset:", fileObj.key);
@@ -37,6 +42,29 @@ export class PreloadScene extends Scene {
       // Create a dummy audio for missing audio files
       if (fileObj.type === "audio") {
         this.cache.audio.add(fileObj.key, { tag: new Audio() });
+      }
+
+      // For image errors, create a placeholder
+      if (fileObj.type === "image") {
+        // Create a canvas with a colored rectangle as placeholder
+        const canvas = document.createElement("canvas");
+        canvas.width = 32;
+        canvas.height = 32;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.fillStyle = "#FF00FF"; // Magenta placeholder
+          ctx.fillRect(0, 0, 32, 32);
+          ctx.strokeStyle = "#000000";
+          ctx.strokeRect(0, 0, 32, 32);
+          ctx.font = "10px Arial";
+          ctx.fillStyle = "#FFFFFF";
+          ctx.fillText(fileObj.key, 2, 16, 28);
+        }
+
+        // Add the placeholder to the cache
+        const img = new Image();
+        img.src = canvas.toDataURL();
+        this.textures.addImage(fileObj.key, img);
       }
     });
 
@@ -123,26 +151,32 @@ export class PreloadScene extends Scene {
   }
 
   create(): void {
-    // Create player animations here to ensure they're ready before the game scene
-    this.anims.create({
-      key: "left",
-      frames: this.anims.generateFrameNumbers("player", { start: 0, end: 3 }),
-      frameRate: 10,
-      repeat: -1,
-    });
+    // Check if animations already exist before creating
+    if (!this.anims.exists("left")) {
+      this.anims.create({
+        key: "left",
+        frames: this.anims.generateFrameNumbers("player", { start: 0, end: 3 }),
+        frameRate: 10,
+        repeat: -1,
+      });
+    }
 
-    this.anims.create({
-      key: "turn",
-      frames: [{ key: "player", frame: 4 }],
-      frameRate: 20,
-    });
+    if (!this.anims.exists("turn")) {
+      this.anims.create({
+        key: "turn",
+        frames: [{ key: "player", frame: 4 }],
+        frameRate: 20,
+      });
+    }
 
-    this.anims.create({
-      key: "right",
-      frames: this.anims.generateFrameNumbers("player", { start: 5, end: 8 }),
-      frameRate: 10,
-      repeat: -1,
-    });
+    if (!this.anims.exists("right")) {
+      this.anims.create({
+        key: "right",
+        frames: this.anims.generateFrameNumbers("player", { start: 5, end: 8 }),
+        frameRate: 10,
+        repeat: -1,
+      });
+    }
 
     // Initialize game settings
     this.registry.set("soundEnabled", true);

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#000000">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="orientation" content="landscape">
+    <title>Dune Runner</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html, body {
+        margin: 0;
+        padding: 0;
+        background-color: #000;
+        overflow: hidden;
+        touch-action: none;
+        width: 100%;
+        height: 100%;
+        position: fixed;
+      }
+      #game {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+      }
+      canvas {
+        display: block;
+        margin: 0 auto;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+      #rotate-message {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: #000;
+        display: none;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        z-index: 2000;
+        color: #fff;
+        text-align: center;
+        font-family: Arial, sans-serif;
+      }
+      #rotate-message img {
+        width: 64px;
+        height: 64px;
+        margin-bottom: 20px;
+        animation: rotate 2s infinite ease-in-out;
+      }
+      #rotate-message p {
+        font-size: 24px;
+        margin: 20px;
+        padding: 0;
+        color: #fff;
+        text-shadow: 0 0 5px rgba(255,255,255,0.5);
+      }
+      @keyframes rotate {
+        0% { transform: rotate(0deg); }
+        50% { transform: rotate(-90deg); }
+        100% { transform: rotate(0deg); }
+      }
+      @media (orientation: portrait) {
+        #rotate-message {
+          display: flex;
+        }
+        #game {
+          display: none;
+        }
+      }
+      @media (orientation: landscape) {
+        #game {
+          display: block;
+        }
+        #rotate-message {
+          display: none;
+        }
+      }
+      /* Hide any iOS safari UI elements */
+      body::before {
+        content: '';
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: env(safe-area-inset-top);
+        background-color: #000;
+        z-index: 10000;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="rotate-message">
+      <div style="font-size: 64px; margin-bottom: 20px;">🔄</div>
+      <p>Please rotate your device to landscape mode<br>for the best gaming experience</p>
+    </div>
+    <script src="main.js"></script>
+  </body>
+</html> 
